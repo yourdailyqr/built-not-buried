@@ -150,13 +150,15 @@ html,body{width:100%;height:100%;height:100dvh;background:#0a0a0a;overflow:hidde
 #nav{
   display:flex;
   align-items:center;
-  gap:8px;
+  justify-content:space-between;
+  width:100%;
+  gap:0;
 }
 #nav button{
   background:none;border:none;
   color:rgba(255,255,255,0.65);
   font-size:27px;cursor:pointer;
-  padding:4px 12px;line-height:1;
+  padding:8px 18px;line-height:1;
   transition:color 0.15s;
 }
 #nav button:disabled{color:rgba(255,255,255,0.18);cursor:default}
@@ -399,34 +401,64 @@ function revealAnswer(){
 
 
 
-// ── SCAN GATE: Rolling 72-hour inactivity timer (spec-compliant) ─────────────
-var GATE_KEY = 'ydq_builtnot buried_last_view_ts';
-var GATE_LIMIT = 72 * 60 * 60 * 1000;
+// ── SCAN GATE: Rolling 72-hour inactivity timer ──────────────────────────────
+//
+// Two-signal design:
+//   sessionStorage flag  = "did this tab/window open fresh right now?"
+//   localStorage stamp   = "when did this user last actively view content?"
+//
+// Rules:
+//   1. Fresh session (QR scan / typed URL / new tab) → always show content.
+//      Set/refresh localStorage stamp. Set sessionStorage flag.
+//   2. Returning session, stamp < 72 hrs → show content. Refresh stamp.
+//   3. Returning session, stamp ≥ 72 hrs → clear stamp. Show gate.
+//   4. visibilitychange fires after 72 hrs idle → clear stamp. Show gate.
+//      Next real scan has no stamp → Rule 1 applies.
 
-function gateCheck(){
+var GATE_LS_KEY  = 'ydq_builtnot_buried_last_view_ts'; // localStorage stamp
+var GATE_SS_KEY  = 'ydq_builtnot_buried_session';      // sessionStorage flag
+var GATE_LIMIT   = 72 * 60 * 60 * 1000;               // 72 hours in ms
+
+function gateCheck() {
   var now = Date.now();
-  var stamp = null;
-  try { stamp = localStorage.getItem(GATE_KEY); } catch(e){}
 
-  if(!stamp){
-    // Rule 1: No stamp — first scan. Set stamp, show content.
-    try { localStorage.setItem(GATE_KEY, now); } catch(e){}
+  // ── Is this a fresh session? (QR scan, typed URL, new tab) ──────────────
+  var isFreshSession = false;
+  try { isFreshSession = !sessionStorage.getItem(GATE_SS_KEY); } catch(e) {}
+
+  if (isFreshSession) {
+    // Mark this session as active so revisibility-checks don't re-trigger
+    try { sessionStorage.setItem(GATE_SS_KEY, '1'); } catch(e) {}
+    // Always show content on a fresh open — set/refresh stamp
+    try { localStorage.setItem(GATE_LS_KEY, now); } catch(e) {}
+    showContent();
+    return;
+  }
+
+  // ── Returning session: check elapsed time ────────────────────────────────
+  var stamp = null;
+  try { stamp = localStorage.getItem(GATE_LS_KEY); } catch(e) {}
+
+  if (!stamp) {
+    // No stamp (was cleared by a prior gate firing) — gate them
+    showGate();
+    return;
+  }
+
+  var elapsed = now - parseInt(stamp, 10);
+
+  if (elapsed < GATE_LIMIT) {
+    // Rule 2: within 72 hrs — refresh stamp, show content
+    try { localStorage.setItem(GATE_LS_KEY, now); } catch(e) {}
     showContent();
   } else {
-    var elapsed = now - parseInt(stamp, 10);
-    if(elapsed < GATE_LIMIT){
-      // Rule 2: Within 72 hrs — refresh stamp, show content.
-      try { localStorage.setItem(GATE_KEY, now); } catch(e){}
-      showContent();
-    } else {
-      // Rule 3: 72+ hrs — clear stamp, show gate.
-      try { localStorage.removeItem(GATE_KEY); } catch(e){}
-      showGate();
-    }
+    // Rule 3: 72+ hrs — clear stamp, show gate
+    try { localStorage.removeItem(GATE_LS_KEY); } catch(e) {}
+    showGate();
   }
 }
 
-function showContent(){
+function showContent() {
   document.getElementById('gate').style.display = 'none';
   document.getElementById('card').style.visibility = 'visible';
   document.getElementById('bg').style.visibility = 'visible';
@@ -434,31 +466,44 @@ function showContent(){
   showDay(0);
 }
 
-function showGate(){
+function showGate() {
   document.getElementById('gate').style.display = 'flex';
   document.getElementById('card').style.visibility = 'hidden';
   document.getElementById('bg').style.visibility = 'hidden';
   document.getElementById('footer').style.visibility = 'hidden';
 }
 
-function gateReset(){
-  try { localStorage.removeItem(GATE_KEY); } catch(e){}
+function gateReset() {
+  // Testing convenience: wipe both keys and reload
+  try { localStorage.removeItem(GATE_LS_KEY); } catch(e) {}
+  try { sessionStorage.removeItem(GATE_SS_KEY); } catch(e) {}
   location.reload();
 }
 
-// Visibility change listener — gates if tab comes back after 72+ hrs
-document.addEventListener('visibilitychange', function(){
-  if(document.visibilityState === 'visible'){
-    var stamp = null;
-    try { stamp = localStorage.getItem(GATE_KEY); } catch(e){}
-    if(stamp && (Date.now() - parseInt(stamp, 10)) >= GATE_LIMIT){
-      try { localStorage.removeItem(GATE_KEY); } catch(e){}
-      showGate();
-    }
+// ── Visibility change: catches tab returning from background after 72+ hrs ──
+document.addEventListener('visibilitychange', function () {
+  if (document.visibilityState !== 'visible') return;
+
+  // Only act if this is a returning session (session flag already set)
+  var inSession = false;
+  try { inSession = !!sessionStorage.getItem(GATE_SS_KEY); } catch(e) {}
+  if (!inSession) return;
+
+  var stamp = null;
+  try { stamp = localStorage.getItem(GATE_LS_KEY); } catch(e) {}
+
+  if (!stamp) {
+    showGate();
+    return;
+  }
+
+  if ((Date.now() - parseInt(stamp, 10)) >= GATE_LIMIT) {
+    try { localStorage.removeItem(GATE_LS_KEY); } catch(e) {}
+    showGate();
   }
 });
 
-// Initial check on load
+// ── Run on load ──────────────────────────────────────────────────────────────
 gateCheck();
 
 </script>
